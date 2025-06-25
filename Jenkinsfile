@@ -8,11 +8,6 @@ pipeline {
     KUBE_CRED       = 'k8s-config'           // ID du credential kubeconfig
   }
 
-  stages {
-    stage('Checkout') {
-      steps { checkout scm }
-    }
-
     stage('Data Validation') {
       steps {
         // On exécute un container python:3.9-slim en shell
