@@ -1,60 +1,122 @@
 pipeline {
-  agent any
-
-  options {
-    // Empêche tout checkout automatique (y compris Declarative: Checkout SCM)
-    skipDefaultCheckout()
-  }
-
-  environment {
-    DOCKER_REGISTRY = 'docker.io/mathis'
-    IMAGE_NAME      = 'vision-classifier'
-    REGISTRY_CRED   = 'registry-credentials'
-  }
-
-  stages {
-    stage('Checkout') {
-      steps {
-        // Premier et unique clone de votre dépôt
-        checkout scm
-      }
-    }
-
-    stage('Data Validation') {
-      steps {
-        sh '''
-          docker run --rm \
-            -u root:root \
-            -v "$PWD":/workspace -w /workspace \
-            python:3.11-slim bash -lc "
-              pip install --no-cache-dir -r requirements.txt &&
-              python scripts/validate_input_data.py &&
-              python scripts/check_data_quality.py
-            "
-        '''
-      }
-    }
-
-    stage('Build & Push Docker') {
-      steps {
-        script {
-          def img = docker.build(
-            "${DOCKER_REGISTRY}/${IMAGE_NAME}:${env.BUILD_NUMBER}",
-            "-f Dockerfile.ml-service ."
-          )
-          docker.withRegistry("https://${DOCKER_REGISTRY}", REGISTRY_CRED) {
-            img.push()
-            img.push('latest')
-          }
-        }
-      }
-    }
-  }
-
-  post {
-    always {
-      // Ici on est bien dans un node, donc FilePath est disponible
-      archiveArtifacts artifacts: 'logs/**', allowEmptyArchive: true
-    }
-  }
+agent any
+environment {
+DOCKER_REGISTRY = 'docker.io'
+MODEL_NAME = 'vision-classifier'
+KUBECONFIG = credentials('k8s-config')
+}
+stages {
+stage('Data Processing') {
+parallel {
+stage('Data Validation') {
+steps {
+script {
+sh '''
+python scripts/validate_input_data.py
+python scripts/check_data_quality.py
+'''
+}
+}
+}
+stage('Feature Engineering') {
+steps {
+sh 'python src/feature_engineering.py'
+}
+}
+}
+}
+stage('Model Training') {
+when {
+expression {
+return params.RETRAIN_MODEL == true ||
+currentBuild.previousBuild?.result != 'SUCCESS'
+}
+}
+steps {
+script {
+def trainingJob = build job: 'model-training-job',
+parameters: [
+string(name: 'DATA_VERSION', value: env.DATA_VERSION),
+string(name: 'MODEL_CONFIG', value: 'production')
+]
+env.MODEL_VERSION = trainingJob.getBuildVariables().MODEL_VERSION
+}
+}
+}
+stage('Model Evaluation') {
+steps {
+script {
+sh '''
+python src/evaluate_model.py \
+--model-version ${MODEL_VERSION} \
+--threshold 0.9
+'''
+def evaluation = readJSON file: 'evaluation_results.json'
+if (evaluation.accuracy < 0.9) {
+error("Model accuracy below threshold: ${evaluation.accuracy}")
+}
+}
+}
+}
+stage('Docker Build') {
+steps {
+script {
+def image =
+docker.build("${DOCKER_REGISTRY}/${MODEL_NAME}:${MODEL_VERSION}")
+docker.withRegistry("https://${DOCKER_REGISTRY}", 'registry-credentials') {
+image.push()
+image.push('latest')
+}
+}
+}
+}
+stage('Deploy to Staging') {steps {
+sh '''
+helm upgrade --install ${MODEL_NAME}-staging helm/ml-service \
+--set image.tag=${MODEL_VERSION} \
+--set environment=staging \
+--namespace ml-staging
+'''
+}
+}
+stage('Integration Tests') {
+steps {
+sh '''
+python tests/integration_tests.py \
+--endpoint http://ml-staging.internal/predict
+'''
+}
+}
+stage('Deploy to Production') {
+when {
+branch 'main'
+}
+input {
+message "Deploy to production?"
+ok "Deploy"
+}
+steps {
+sh '''
+helm upgrade --install ${MODEL_NAME} helm/ml-service \
+--set image.tag=${MODEL_VERSION} \
+--set environment=production \
+--set replicas=3 \
+--namespace ml-production
+'''
+}
+}
+}
+post {
+always {
+archiveArtifacts artifacts: 'logs/**', allowEmptyArchive: true
+publishHTML([
+allowMissing: false,
+alwaysLinkToLastBuild: true,
+keepAll: true,
+reportDir: 'reports',
+reportFiles: 'model_report.html',
+reportName: 'Model Report'
+])
+}
+}
 }
