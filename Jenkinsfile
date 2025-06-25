@@ -2,15 +2,23 @@ pipeline {
     agent any
 
     stages {
-        stage('SCM Check') {
+        stage('Force clone complet') {
             steps {
-                script {
-                    echo "Liste des fichiers :"
-                    sh 'ls -la'
+                checkout([$class: 'GitSCM',
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/Mathis0000/junkins'
+                    ]],
+                    branches: [[name: '*/main']]
+                ])
+            }
+        }
 
-                    echo "Révision git :"
-                    sh 'git rev-parse HEAD'
-                }
+        stage('Vérification Git') {
+            steps {
+                echo "Contenu du workspace :"
+                sh 'ls -la'
+                echo "SHA actuel du repo :"
+                sh 'git rev-parse HEAD'
             }
         }
     }
