@@ -8,13 +8,6 @@ pipeline {
     }
 
     stages {
-        stage('Checkout') {
-            steps {
-                deleteDir() // Nettoie le workspace avant de cloner
-                checkout scm
-            }
-        }
-
         stage('Data Processing') {
             parallel {
                 stage('Data Validation') {
