@@ -1,6 +1,11 @@
 pipeline {
   agent any
 
+  options {
+    // Empêche le checkout automatique en début de pipeline
+    skipDefaultCheckout()
+  }
+
   environment {
     DOCKER_REGISTRY = 'docker.io/mathis'
     IMAGE_NAME      = 'vision-classifier'
@@ -10,6 +15,7 @@ pipeline {
   stages {
     stage('Checkout') {
       steps {
+        // UNIQUE checkout de votre repo
         checkout scm
       }
     }
@@ -47,6 +53,7 @@ pipeline {
 
   post {
     always {
+      // Archiver depuis le workspace courant (node) : fonctionne car on est bien dans un node
       archiveArtifacts artifacts: 'logs/**', allowEmptyArchive: true
     }
   }
