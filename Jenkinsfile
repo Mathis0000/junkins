@@ -1,8 +1,12 @@
 pipeline {
     agent any
 
+    options {
+        skipDefaultCheckout() // ✅ empêche Jenkins de refaire un checkout
+    }
+
     stages {
-        stage('Force clone complet') {
+        stage('Clone propre') {
             steps {
                 checkout([$class: 'GitSCM',
                     userRemoteConfigs: [[
@@ -13,11 +17,11 @@ pipeline {
             }
         }
 
-        stage('Vérification Git') {
+        stage('Check .git') {
             steps {
                 echo "Contenu du workspace :"
                 sh 'ls -la'
-                echo "SHA actuel du repo :"
+                echo "SHA du commit :"
                 sh 'git rev-parse HEAD'
             }
         }
