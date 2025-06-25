@@ -1,7 +1,11 @@
 pipeline {
   agent any
 
-  // Pas besoin de skipDefaultCheckout(), on garde le checkout automatique initial
+  options {
+    // Empêche tout checkout automatique (y compris Declarative: Checkout SCM)
+    skipDefaultCheckout()
+  }
+
   environment {
     DOCKER_REGISTRY = 'docker.io/mathis'
     IMAGE_NAME      = 'vision-classifier'
@@ -9,6 +13,13 @@ pipeline {
   }
 
   stages {
+    stage('Checkout') {
+      steps {
+        // Premier et unique clone de votre dépôt
+        checkout scm
+      }
+    }
+
     stage('Data Validation') {
       steps {
         sh '''
@@ -42,6 +53,7 @@ pipeline {
 
   post {
     always {
+      // Ici on est bien dans un node, donc FilePath est disponible
       archiveArtifacts artifacts: 'logs/**', allowEmptyArchive: true
     }
   }
