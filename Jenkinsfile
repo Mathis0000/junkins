@@ -2,7 +2,7 @@ pipeline {
   agent any
 
   options {
-    // Empêche le checkout automatique en début de pipeline
+    // Désactive le checkout automatique initial
     skipDefaultCheckout()
   }
 
@@ -15,7 +15,7 @@ pipeline {
   stages {
     stage('Checkout') {
       steps {
-        // UNIQUE checkout de votre repo
+        // Premier et unique checkout de votre repo
         checkout scm
       }
     }
@@ -38,10 +38,12 @@ pipeline {
     stage('Build & Push Docker') {
       steps {
         script {
+          // On build à partir de Dockerfile.ml-service
           def img = docker.build(
             "${DOCKER_REGISTRY}/${IMAGE_NAME}:${env.BUILD_NUMBER}",
             "-f Dockerfile.ml-service ."
           )
+          // Puis on push dans Docker Hub
           docker.withRegistry("https://${DOCKER_REGISTRY}", REGISTRY_CRED) {
             img.push()
             img.push('latest')
@@ -53,7 +55,7 @@ pipeline {
 
   post {
     always {
-      // Archiver depuis le workspace courant (node) : fonctionne car on est bien dans un node
+      // Archive les logs en fin de pipeline
       archiveArtifacts artifacts: 'logs/**', allowEmptyArchive: true
     }
   }
