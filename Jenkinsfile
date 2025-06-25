@@ -7,7 +7,7 @@ pipeline {
   }
 
   environment {
-    DOCKER_REGISTRY = 'docker.io/mathis/junkins'
+    DOCKER_REGISTRY = 'docker.io/mathis'
     IMAGE_NAME      = 'vision-classifier'
     REGISTRY_CRED   = 'registry-credentials'
   }
