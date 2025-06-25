@@ -8,26 +8,14 @@ pipeline {
     KUBE_CRED       = 'k8s-config'
   }
 
-  options {
-    // empêche Jenkins de faire un checkout automatique avant de lancer le Jenkinsfile
-    skipDefaultCheckout()
-  }
-
   stages {
-    stage('Checkout') {
-      steps {
-        // votre unique checkout
-        checkout scm
-      }
-    }
-
     stage('Data Validation') {
       steps {
         sh '''
           docker run --rm \
             -u root:root \
             -v "$PWD":/workspace -w /workspace \
-            python:3.9-slim bash -lc "
+            python:3.11-slim bash -lc "
               pip install --no-cache-dir -r requirements.txt &&
               python scripts/validate_input_data.py &&
               python scripts/check_data_quality.py
@@ -42,7 +30,7 @@ pipeline {
           docker run --rm \
             -u root:root \
             -v "$PWD":/workspace -w /workspace \
-            python:3.9-slim bash -lc "
+            python:3.11-slim bash -lc "
               pip install --no-cache-dir -r requirements.txt &&
               python src/feature_engineering.py
             "
@@ -53,8 +41,8 @@ pipeline {
     stage('Model Training') {
       when {
         anyOf {
-          expression { return params.RETRAIN_MODEL == true }
-          expression { return currentBuild.previousBuild?.result != 'SUCCESS' }
+          expression { params.RETRAIN_MODEL == true }
+          expression { currentBuild.previousBuild?.result != 'SUCCESS' }
         }
       }
       steps {
@@ -75,21 +63,21 @@ pipeline {
           docker run --rm \
             -u root:root \
             -v "$PWD":/workspace -w /workspace \
-            python:3.9-slim bash -lc "
+            python:3.11-slim bash -lc "
               pip install --no-cache-dir -r requirements.txt &&
               python src/evaluate_model.py --model-version ${MODEL_VERSION} --threshold 0.9
             "
         '''
         script {
-          def eval = readJSON file: 'evaluation_results.json'
-          if (eval.accuracy < 0.9) {
-            error("Accuracy too low (${eval.accuracy} < 0.9)")
+          def result = readJSON file: 'evaluation_results.json'
+          if (result.accuracy < 0.9) {
+            error "Model accuracy ${result.accuracy} is below threshold"
           }
         }
       }
     }
 
-    stage('Docker Build') {
+    stage('Build & Push Docker') {
       steps {
         withCredentials([
           usernamePassword(
@@ -98,13 +86,13 @@ pipeline {
             passwordVariable: 'DOCKER_PASS'
           )
         ]) {
-          sh """
-            docker build -t ${DOCKER_REGISTRY}/${MODEL_NAME}:${MODEL_VERSION} .
-            echo "${DOCKER_PASS}" | docker login ${DOCKER_REGISTRY} --username "${DOCKER_USER}" --password-stdin
-            docker push ${DOCKER_REGISTRY}/${MODEL_NAME}:${MODEL_VERSION}
-            docker tag ${DOCKER_REGISTRY}/${MODEL_NAME}:${MODEL_VERSION} ${DOCKER_REGISTRY}/${MODEL_NAME}:latest
-            docker push ${DOCKER_REGISTRY}/${MODEL_NAME}:latest
-          """
+          sh '''
+            docker build -t $DOCKER_REGISTRY/$MODEL_NAME:$MODEL_VERSION .
+            echo "$DOCKER_PASS" | docker login $DOCKER_REGISTRY --username "$DOCKER_USER" --password-stdin
+            docker push $DOCKER_REGISTRY/$MODEL_NAME:$MODEL_VERSION
+            docker tag $DOCKER_REGISTRY/$MODEL_NAME:$MODEL_VERSION $DOCKER_REGISTRY/$MODEL_NAME:latest
+            docker push $DOCKER_REGISTRY/$MODEL_NAME:latest
+          '''
         }
       }
     }
@@ -112,12 +100,12 @@ pipeline {
     stage('Deploy to Staging') {
       steps {
         withCredentials([file(credentialsId: "${KUBE_CRED}", variable: 'KUBECONFIG')]) {
-          sh """
-            helm upgrade --install ${MODEL_NAME}-staging helm/ml-service \
+          sh '''
+            helm upgrade --install $MODEL_NAME-staging helm/ml-service \
               --namespace ml-staging \
-              --set image.tag=${MODEL_VERSION} \
+              --set image.tag=$MODEL_VERSION \
               --set environment=staging
-          """
+          '''
         }
       }
     }
@@ -128,7 +116,7 @@ pipeline {
           docker run --rm \
             -u root:root \
             -v "$PWD":/workspace -w /workspace \
-            python:3.9-slim bash -lc "
+            python:3.11-slim bash -lc "
               pip install --no-cache-dir -r requirements.txt &&
               python tests/integration_tests.py --endpoint http://ml-staging.internal/predict
             "
@@ -137,22 +125,20 @@ pipeline {
     }
 
     stage('Deploy to Production') {
-      when {
-        branch 'main'
-      }
+      when { branch 'main' }
       input {
-        message "Deploy in production?"
-        ok      "Yes, deploy"
+        message "Deploy to production?"
+        ok      "Deploy"
       }
       steps {
         withCredentials([file(credentialsId: "${KUBE_CRED}", variable: 'KUBECONFIG')]) {
-          sh """
-            helm upgrade --install ${MODEL_NAME} helm/ml-service \
+          sh '''
+            helm upgrade --install $MODEL_NAME helm/ml-service \
               --namespace ml-production \
-              --set image.tag=${MODEL_VERSION} \
+              --set image.tag=$MODEL_VERSION \
               --set replicas=3 \
               --set environment=production
-          """
+          '''
         }
       }
     }
