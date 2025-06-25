@@ -2,19 +2,31 @@ pipeline {
   agent any
 
   environment {
-    DOCKER_REGISTRY = 'docker.io'            // ou votre registry
-    MODEL_NAME      = 'vision-classifier'    // nom de votre image/chart
-    REGISTRY_CRED   = 'registry-credentials' // ID du credential Docker
-    KUBE_CRED       = 'k8s-config'           // ID du credential kubeconfig
+    DOCKER_REGISTRY = 'docker.io'
+    MODEL_NAME      = 'vision-classifier'
+    REGISTRY_CRED   = 'registry-credentials'
+    KUBE_CRED       = 'k8s-config'
   }
+
+  options {
+    // empêche Jenkins de faire un checkout automatique avant de lancer le Jenkinsfile
+    skipDefaultCheckout()
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        // votre unique checkout
+        checkout scm
+      }
+    }
 
     stage('Data Validation') {
       steps {
-        // On exécute un container python:3.9-slim en shell
         sh '''
-          docker run --rm \\
-            -u root:root \\
-            -v "$PWD":/workspace -w /workspace \\
+          docker run --rm \
+            -u root:root \
+            -v "$PWD":/workspace -w /workspace \
             python:3.9-slim bash -lc "
               pip install --no-cache-dir -r requirements.txt &&
               python scripts/validate_input_data.py &&
@@ -27,9 +39,9 @@ pipeline {
     stage('Feature Engineering') {
       steps {
         sh '''
-          docker run --rm \\
-            -u root:root \\
-            -v "$PWD":/workspace -w /workspace \\
+          docker run --rm \
+            -u root:root \
+            -v "$PWD":/workspace -w /workspace \
             python:3.9-slim bash -lc "
               pip install --no-cache-dir -r requirements.txt &&
               python src/feature_engineering.py
@@ -60,9 +72,9 @@ pipeline {
     stage('Model Evaluation') {
       steps {
         sh '''
-          docker run --rm \\
-            -u root:root \\
-            -v "$PWD":/workspace -w /workspace \\
+          docker run --rm \
+            -u root:root \
+            -v "$PWD":/workspace -w /workspace \
             python:3.9-slim bash -lc "
               pip install --no-cache-dir -r requirements.txt &&
               python src/evaluate_model.py --model-version ${MODEL_VERSION} --threshold 0.9
@@ -79,23 +91,31 @@ pipeline {
 
     stage('Docker Build') {
       steps {
-        sh """
-          docker build -t ${DOCKER_REGISTRY}/${MODEL_NAME}:${MODEL_VERSION} .
-          echo '$DOCKER_REGISTRY_PASSWORD' | docker login ${DOCKER_REGISTRY} --username '$DOCKER_REGISTRY_USERNAME' --password-stdin
-          docker push ${DOCKER_REGISTRY}/${MODEL_NAME}:${MODEL_VERSION}
-          docker tag ${DOCKER_REGISTRY}/${MODEL_NAME}:${MODEL_VERSION} ${DOCKER_REGISTRY}/${MODEL_NAME}:latest
-          docker push ${DOCKER_REGISTRY}/${MODEL_NAME}:latest
-        """
+        withCredentials([
+          usernamePassword(
+            credentialsId: "${REGISTRY_CRED}",
+            usernameVariable: 'DOCKER_USER',
+            passwordVariable: 'DOCKER_PASS'
+          )
+        ]) {
+          sh """
+            docker build -t ${DOCKER_REGISTRY}/${MODEL_NAME}:${MODEL_VERSION} .
+            echo "${DOCKER_PASS}" | docker login ${DOCKER_REGISTRY} --username "${DOCKER_USER}" --password-stdin
+            docker push ${DOCKER_REGISTRY}/${MODEL_NAME}:${MODEL_VERSION}
+            docker tag ${DOCKER_REGISTRY}/${MODEL_NAME}:${MODEL_VERSION} ${DOCKER_REGISTRY}/${MODEL_NAME}:latest
+            docker push ${DOCKER_REGISTRY}/${MODEL_NAME}:latest
+          """
+        }
       }
     }
 
     stage('Deploy to Staging') {
       steps {
-        withCredentials([file(credentialsId: KUBE_CRED, variable: 'KUBECONFIG')]) {
+        withCredentials([file(credentialsId: "${KUBE_CRED}", variable: 'KUBECONFIG')]) {
           sh """
-            helm upgrade --install ${MODEL_NAME}-staging helm/ml-service \\
-              --namespace ml-staging \\
-              --set image.tag=${MODEL_VERSION} \\
+            helm upgrade --install ${MODEL_NAME}-staging helm/ml-service \
+              --namespace ml-staging \
+              --set image.tag=${MODEL_VERSION} \
               --set environment=staging
           """
         }
@@ -105,9 +125,9 @@ pipeline {
     stage('Integration Tests') {
       steps {
         sh '''
-          docker run --rm \\
-            -u root:root \\
-            -v "$PWD":/workspace -w /workspace \\
+          docker run --rm \
+            -u root:root \
+            -v "$PWD":/workspace -w /workspace \
             python:3.9-slim bash -lc "
               pip install --no-cache-dir -r requirements.txt &&
               python tests/integration_tests.py --endpoint http://ml-staging.internal/predict
@@ -117,15 +137,20 @@ pipeline {
     }
 
     stage('Deploy to Production') {
-      when { branch 'main' }
-      input { message "Deploy in production?"; ok "Go" }
+      when {
+        branch 'main'
+      }
+      input {
+        message "Deploy in production?"
+        ok      "Yes, deploy"
+      }
       steps {
-        withCredentials([file(credentialsId: KUBE_CRED, variable: 'KUBECONFIG')]) {
+        withCredentials([file(credentialsId: "${KUBE_CRED}", variable: 'KUBECONFIG')]) {
           sh """
-            helm upgrade --install ${MODEL_NAME} helm/ml-service \\
-              --namespace ml-production \\
-              --set image.tag=${MODEL_VERSION} \\
-              --set replicas=3 \\
+            helm upgrade --install ${MODEL_NAME} helm/ml-service \
+              --namespace ml-production \
+              --set image.tag=${MODEL_VERSION} \
+              --set replicas=3 \
               --set environment=production
           """
         }
